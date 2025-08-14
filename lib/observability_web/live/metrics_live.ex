@@ -3,11 +3,19 @@ defmodule ObservabilityWeb.MetricsLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    {:ok, assign(socket, metric_stream: false)}
+    {:ok,
+     assign(socket,
+       metric_stream: false,
+       error_metric_stream: false,
+       timer_ref: nil,
+       error_timer_ref: nil
+     )}
   end
 
   @impl true
   def handle_event("trigger_metric", _params, socket) do
+    :telemetry.execute([:metrics, :pillar, :trigger, :button], %{total: 1}, %{})
+
     {:noreply,
      socket
      |> put_flash(:info, "Metric triggered successfully!")}
@@ -18,12 +26,87 @@ defmodule ObservabilityWeb.MetricsLive do
     current_state = socket.assigns.metric_stream
     new_state = !current_state
 
-    message = if new_state, do: "Metric stream started!", else: "Metric stream stopped!"
+    socket =
+      if new_state do
+        # Start the metric stream
+        timer_ref = Process.send_after(self(), :emit_metric, 1000)
+        assign(socket, timer_ref: timer_ref)
+      else
+        # Stop the metric stream
+        if socket.assigns.timer_ref do
+          Process.cancel_timer(socket.assigns.timer_ref)
+        end
+
+        assign(socket, timer_ref: nil)
+      end
+
+    message =
+      if new_state, do: "Success metric stream started!", else: "Success metric stream stopped!"
 
     {:noreply,
      socket
      |> assign(metric_stream: new_state)
      |> put_flash(:info, message)}
+  end
+
+  @impl true
+  def handle_event("toggle_error_metric_stream", _params, socket) do
+    current_state = socket.assigns.error_metric_stream
+    new_state = !current_state
+
+    socket =
+      if new_state do
+        # Start the error metric stream
+        error_timer_ref = Process.send_after(self(), :emit_error_metric, 1000)
+        assign(socket, error_timer_ref: error_timer_ref)
+      else
+        # Stop the error metric stream
+        if socket.assigns.error_timer_ref do
+          Process.cancel_timer(socket.assigns.error_timer_ref)
+        end
+
+        assign(socket, error_timer_ref: nil)
+      end
+
+    message =
+      if new_state, do: "Error metric stream started!", else: "Error metric stream stopped!"
+
+    {:noreply,
+     socket
+     |> assign(error_metric_stream: new_state)
+     |> put_flash(:info, message)}
+  end
+
+  @impl true
+  def handle_info(:emit_metric, socket) do
+    if socket.assigns.metric_stream do
+      # Emit the metric with success status
+      :telemetry.execute([:metrics, :pillar, :trigger, :stream], %{total: 1}, %{
+        status: :success
+      })
+
+      # Schedule the next emission
+      timer_ref = Process.send_after(self(), :emit_metric, 1000)
+      {:noreply, assign(socket, timer_ref: timer_ref)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  @impl true
+  def handle_info(:emit_error_metric, socket) do
+    if socket.assigns.error_metric_stream do
+      # Emit the metric with error status
+      :telemetry.execute([:metrics, :pillar, :trigger, :stream], %{total: 1}, %{
+        status: :error
+      })
+
+      # Schedule the next emission
+      error_timer_ref = Process.send_after(self(), :emit_error_metric, 1000)
+      {:noreply, assign(socket, error_timer_ref: error_timer_ref)}
+    else
+      {:noreply, socket}
+    end
   end
 
   @impl true
@@ -52,42 +135,92 @@ defmodule ObservabilityWeb.MetricsLive do
               phx-click="toggle_metric_stream"
               class={
                 if @metric_stream do
-                  "flex items-center justify-center !bg-rose-600 !hover:bg-rose-700 text-lg py-3 px-6 rounded-lg shadow-md transition-all duration-300 transform hover:scale-105"
+                  "flex items-center justify-center !bg-green-400 !hover:bg-green-500 text-lg py-3 px-6 rounded-lg shadow-md transition-all duration-300 transform hover:scale-105"
                 else
                   "flex items-center justify-center !bg-emerald-600 !hover:bg-emerald-700 text-lg py-3 px-6 rounded-lg shadow-md transition-all duration-300 transform hover:scale-105"
                 end
               }
             >
               <span class="mr-2">
-                <%= if @metric_stream, do: "Stop", else: "Start" %> Metric Stream
+                {if @metric_stream, do: "Stop", else: "Start"} Success Metric Stream
               </span>
-              <.icon name={if @metric_stream, do: "hero-stop-solid", else: "hero-play-solid"} class="h-5 w-5" />
+              <.icon
+                name={if @metric_stream, do: "hero-stop-solid", else: "hero-play-solid"}
+                class="h-5 w-5"
+              />
+            </.button>
+
+            <.button
+              phx-click="toggle_error_metric_stream"
+              class={
+                if @error_metric_stream do
+                  "flex items-center justify-center !bg-red-400 !hover:bg-red-500 text-lg py-3 px-6 rounded-lg shadow-md transition-all duration-300 transform hover:scale-105"
+                else
+                  "flex items-center justify-center !bg-red-600 !hover:bg-red-700 text-lg py-3 px-6 rounded-lg shadow-md transition-all duration-300 transform hover:scale-105"
+                end
+              }
+            >
+              <span class="mr-2">
+                {if @error_metric_stream, do: "Stop", else: "Start"} Error Metric Stream
+              </span>
+              <.icon
+                name={if @error_metric_stream, do: "hero-stop-solid", else: "hero-play-solid"}
+                class="h-5 w-5"
+              />
             </.button>
           </div>
         </div>
 
         <div class="bg-white rounded-xl shadow-lg p-8 max-w-4xl mx-auto">
-          <h2 class="text-2xl font-semibold text-indigo-700 mb-6 border-b border-indigo-100 pb-3">Metrics Status</h2>
-          <div class="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-            <div class="flex items-center">
-              <div class={
+          <h2 class="text-2xl font-semibold text-indigo-700 mb-6 border-b border-indigo-100 pb-3">
+            Metrics Status
+          </h2>
+          <div class="flex flex-col space-y-4">
+            <div class="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+              <div class="flex items-center">
+                <div class={
+                  if @metric_stream do
+                    "w-4 h-4 rounded-full bg-emerald-500 mr-3 animate-pulse"
+                  else
+                    "w-4 h-4 rounded-full bg-gray-400 mr-3"
+                  end
+                }>
+                </div>
+                <span class="text-gray-700 font-medium">Success Metric Stream:</span>
+              </div>
+              <span class={
                 if @metric_stream do
-                  "w-4 h-4 rounded-full bg-emerald-500 mr-3 animate-pulse"
+                  "font-bold text-emerald-600 text-lg"
                 else
-                  "w-4 h-4 rounded-full bg-gray-400 mr-3"
+                  "font-bold text-gray-600 text-lg"
                 end
-              }></div>
-              <span class="text-gray-700 font-medium">Metric Stream:</span>
+              }>
+                {if @metric_stream, do: "Running", else: "Stopped"}
+              </span>
             </div>
-            <span class={
-              if @metric_stream do
-                "font-bold text-emerald-600 text-lg"
-              else
-                "font-bold text-gray-600 text-lg"
-              end
-            }>
-              <%= if @metric_stream, do: "Running", else: "Stopped" %>
-            </span>
+
+            <div class="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+              <div class="flex items-center">
+                <div class={
+                  if @error_metric_stream do
+                    "w-4 h-4 rounded-full bg-red-500 mr-3 animate-pulse"
+                  else
+                    "w-4 h-4 rounded-full bg-gray-400 mr-3"
+                  end
+                }>
+                </div>
+                <span class="text-gray-700 font-medium">Error Metric Stream:</span>
+              </div>
+              <span class={
+                if @error_metric_stream do
+                  "font-bold text-red-600 text-lg"
+                else
+                  "font-bold text-gray-600 text-lg"
+                end
+              }>
+                {if @error_metric_stream, do: "Running", else: "Stopped"}
+              </span>
+            </div>
           </div>
         </div>
       </div>
