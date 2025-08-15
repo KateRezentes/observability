@@ -11,7 +11,8 @@ defmodule ObservabilityWeb.Telemetry do
     children = [
       # Telemetry poller will execute the given period measurements
       # every 10_000ms. Learn more here: https://hexdocs.pm/telemetry_metrics
-      {:telemetry_poller, measurements: periodic_measurements(), period: 10_000}
+      {:telemetry_poller, period: 10_000},
+      {TelemetryMetricsPrometheus, metrics: metrics()}
       # Add reporters as children of your supervision tree.
       # {Telemetry.Metrics.ConsoleReporter, metrics: metrics()}
     ]
@@ -84,14 +85,6 @@ defmodule ObservabilityWeb.Telemetry do
       # Custom Metrics
       counter("metrics.pillar.trigger.button.total"),
       counter("metrics.pillar.trigger.stream.total", tags: [:status])
-    ]
-  end
-
-  defp periodic_measurements do
-    [
-      # A module, function and arguments to be invoked periodically.
-      # This function must call :telemetry.execute/3 and a metric must be added above.
-      # {ObservabilityWeb, :count_users, []}
     ]
   end
 end
